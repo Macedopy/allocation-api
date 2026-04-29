@@ -22,38 +22,56 @@ class AllocationViewModel:
     def __init__(self, solver: ISolver = None):
         self.solver = solver or BranchAndBoundSolver()
 
-    def get_allocation_plan(self) -> Dict[str, Any]:
+    def get_allocation_plan(self, loads_data: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Fetches loads from DB, expands them by quantity, 
-        uses mock trucks, runs the solver, and returns a formatted plan.
+        Runs the solver using provided loads or fetches from DB if none provided.
+        Uses mock trucks.
         """
         # 1. Use Mock Trucks
         vehicles = [Vehicle(**t) for t in self.MOCK_TRUCKS]
 
-        # 2. Fetch Loads and expand by quantity
-        load_queryset = Load.objects.all()
+        # 2. Process Loads (either from input or DB)
         cargos = []
         global_cargo_id = 1
         
-        for l in load_queryset:
-            # Expand quantity: create 'n' separate Cargo objects
-            for _ in range(l.quantidade):
-                cargos.append(
-                    Cargo(
-                        id=global_cargo_id,
-                        name=f"{l.name} #{_ + 1}", # Unique name for each item
-                        peso=l.peso,
-                        alt=l.alt,
-                        larg=l.larg,
-                        comp=l.comp,
-                        val=l.val
+        if loads_data:
+            # Data coming directly from the request
+            for item in loads_data:
+                quantidade = item.get("quantidade", 1)
+                for _ in range(quantidade):
+                    cargos.append(
+                        Cargo(
+                            id=global_cargo_id,
+                            name=f"{item['name']} #{_ + 1}",
+                            peso=float(item['peso']),
+                            alt=float(item['alt']),
+                            larg=float(item['larg']),
+                            comp=float(item['comp']),
+                            val=float(item['val'])
+                        )
                     )
-                )
-                global_cargo_id += 1
+                    global_cargo_id += 1
+        else:
+            # Fallback to DB (optional, but kept for compatibility)
+            load_queryset = Load.objects.all()
+            for l in load_queryset:
+                for _ in range(l.quantidade):
+                    cargos.append(
+                        Cargo(
+                            id=global_cargo_id,
+                            name=f"{l.name} #{_ + 1}",
+                            peso=l.peso,
+                            alt=l.alt,
+                            larg=l.larg,
+                            comp=l.comp,
+                            val=l.val
+                        )
+                    )
+                    global_cargo_id += 1
 
         if not vehicles or not cargos:
             return {
-                "error": "Missing trucks or loads to process.",
+                "error": "No loads provided to process.",
                 "total_value": 0,
                 "allocations": []
             }
@@ -115,6 +133,9 @@ class AllocationViewModel:
             t["percentual_comprimento"] = round((t["comprimento_utilizado"] / t["comprimento_total"]) * 100, 2) if t["comprimento_total"] > 0 else 0
             final_trucks.append(t)
 
+        # Generate the structured text message
+        message = self._generate_summary_message(result, final_trucks, not_allocated)
+
         return {
             "resumo_geral": {
                 "valor_total_alocado": result.total_value,
@@ -124,5 +145,34 @@ class AllocationViewModel:
                 "nos_explorados": result.nodes_explored
             },
             "caminhoes": final_trucks,
-            "nao_alocados": not_allocated
+            "nao_alocados": not_allocated,
+            "message": message
         }
+
+    def _generate_summary_message(self, result: AllocationResult, trucks: List[Dict[str, Any]], not_allocated: List[Dict[str, Any]]) -> str:
+        lines = []
+        lines.append("RELATÓRIO DE ALOCAÇÃO DE CARGA")
+        lines.append(f"Valor Total Alocado: R$ {result.total_value:,.2f}")
+        lines.append(f"Total de itens processados: {sum(len(t['itens']) for t in trucks) + len(not_allocated)}")
+        lines.append("")
+        
+        for t in trucks:
+            if t["itens"]:
+                lines.append(f"CAMINHÃO: {t['nome']}")
+                lines.append(f"Ocupação: {t['percentual_peso']}% do peso | {t['percentual_comprimento']}% do comprimento")
+                lines.append(f"Carga Utilizada: {t['peso_utilizado']:.2f}kg / {t['capacidade_peso']:.2f}kg")
+                lines.append(f"Valor Embarcado: R$ {t['valor_total']:,.2f}")
+                lines.append(f"Qtd de Itens: {len(t['itens'])}")
+                lines.append("")
+        
+        if not_allocated:
+            lines.append(f"ATENÇÃO: {len(not_allocated)} itens não puderam ser alocados por falta de espaço ou restrição técnica.")
+            valor_perdido = sum(item["valor"] for item in not_allocated)
+            lines.append(f"Valor não alocado: R$ {valor_perdido:,.2f}")
+        else:
+            lines.append("SUCESSO: Todas as cargas foram alocadas com eficiência máxima.")
+            
+        lines.append("")
+        lines.append(f"Processamento concluído em {result.execution_time:.4f}s.")
+        
+        return "\n".join(lines)

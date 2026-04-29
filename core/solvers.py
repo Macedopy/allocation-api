@@ -141,3 +141,4 @@ class BranchAndBoundSolver(ISolver):
                     val += it.val
                     break
         return val, asg
+    

@@ -15,3 +15,4 @@ class AllocationPlanSerializer(serializers.Serializer):
     resumo_geral = serializers.DictField()
     caminhoes = serializers.ListField(child=serializers.DictField())
     nao_alocados = serializers.ListField(child=serializers.DictField())
+    message = serializers.CharField()
